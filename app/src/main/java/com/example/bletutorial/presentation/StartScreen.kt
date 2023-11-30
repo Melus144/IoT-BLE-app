@@ -42,7 +42,7 @@ fun StartScreen(
         ){
             Text(
                 text = "Start IoT",
-                fontSize = 35.sp,
+                fontSize = 28.sp,
                 fontWeight = FontWeight.Bold,
                 color = Color.White
             )
