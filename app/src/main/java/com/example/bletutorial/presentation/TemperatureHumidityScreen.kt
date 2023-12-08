@@ -144,11 +144,11 @@ fun TemperatureHumidityScreen(
                     verticalArrangement = Arrangement.Center
                 ){
                     Text(
-                        text = "Humidity: ${viewModel.humidity}",
+                        text = "Humidity: ${viewModel.humidity} %",
                         style = MaterialTheme.typography.h6
                     )
                     Text(
-                        text = "Temperature: ${viewModel.temperature}",
+                        text = "Temperature: ${viewModel.temperature} ºC",
                         style = MaterialTheme.typography.h6
                     )
                 }

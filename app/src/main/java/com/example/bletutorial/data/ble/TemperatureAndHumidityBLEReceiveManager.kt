@@ -5,6 +5,7 @@ import android.bluetooth.*
 import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
+import android.content.ContentValues.TAG
 import android.content.Context
 import android.util.Log
 import com.example.bletutorial.data.ConnectionState
@@ -17,15 +18,15 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.launch
 import java.util.*
 import javax.inject.Inject
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+import kotlin.math.log
 
 @SuppressLint("MissingPermission")
 class TemperatureAndHumidityBLEReceiveManager @Inject constructor(
     private val bluetoothAdapter: BluetoothAdapter,
     private val context: Context
 ) : TemperatureAndHumidityReceiveManager {
-
-    //Remove these old variables
-    private val TEMP_HUMIDITY_CHARACTERISTICS_UUID = "0000aa21-0000-1000-8000-00805f9b34fb"
 
     //Device name, service uuid, characteristics uuid
     private val DEVICE_NAME = "Grup5"
@@ -36,6 +37,7 @@ class TemperatureAndHumidityBLEReceiveManager @Inject constructor(
     // Variables temporales
     private var tempValue: Float? = null
     private var humidityValue: Float? = null
+    private var isTemperatureNotificationSet = false
 
     override val data: MutableSharedFlow<Resource<TempHumidityResult>> = MutableSharedFlow()
 
@@ -74,6 +76,9 @@ class TemperatureAndHumidityBLEReceiveManager @Inject constructor(
 
     private val gattCallback = object : BluetoothGattCallback(){
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
+            super.onConnectionStateChange(gatt, status, newState);
+            Log.d(TAG, "onConnectionStateChange: Status: " + status + ", New State: " + newState);
+
             if(status == BluetoothGatt.GATT_SUCCESS){
                 if(newState == BluetoothProfile.STATE_CONNECTED){
                     coroutineScope.launch {
@@ -108,20 +113,23 @@ class TemperatureAndHumidityBLEReceiveManager @Inject constructor(
         }
 
         override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
+            super.onServicesDiscovered(gatt, status);
+            Log.d(TAG, "onServicesDiscovered: Status: " + status);
+
             with(gatt){
                 printGattTable()
                 coroutineScope.launch {
-                    data.emit(Resource.Loading(message = "Adjusting MTU space..."))
+                    data.emit(Resource.Loading(message = "Activating Notifications..."))
                 }
-                gatt.requestMtu(517)
-            }
+                }
+
             // After discovering services, attempt to find the characteristics
             val temperatureCharacteristic = findCharacteristics(DEVICE_SERVICE_UUID.toString(), TEMPERATURE_CHARACTERISTIC_UUID.toString())
             val humidityCharacteristic = findCharacteristics(DEVICE_SERVICE_UUID.toString(), HUMIDITY_CHARACTERISTIC_UUID.toString())
             if (temperatureCharacteristic != null && humidityCharacteristic != null) {
+                enableNotification(humidityCharacteristic)
                 // If both characteristics are found, enable notifications on them
                 enableNotification(temperatureCharacteristic)
-                enableNotification(humidityCharacteristic)
             } else {
                 coroutineScope.launch {
                     data.emit(Resource.Error(errorMessage = "Could not find temperature and/or humidity characteristics"))
@@ -130,6 +138,9 @@ class TemperatureAndHumidityBLEReceiveManager @Inject constructor(
         }
 
         override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) {
+            super.onMtuChanged(gatt, mtu, status);
+            Log.d(TAG, "onMtuChanged: MTU: " + mtu + ", Status: " + status);
+
             val temperatureCharacteristic = findCharacteristics(DEVICE_SERVICE_UUID.toString(), TEMPERATURE_CHARACTERISTIC_UUID.toString())
             val humidityCharacteristic = findCharacteristics(DEVICE_SERVICE_UUID.toString(), HUMIDITY_CHARACTERISTIC_UUID.toString())
             if(temperatureCharacteristic == null){
@@ -144,78 +155,70 @@ class TemperatureAndHumidityBLEReceiveManager @Inject constructor(
                 }
                 return
             }
+            enableNotification(humidityCharacteristic)
             // If both characteristics are found, enable notifications on them
             enableNotification(temperatureCharacteristic)
-            enableNotification(humidityCharacteristic)
             }
 
-        override fun onCharacteristicChanged(
-            gatt: BluetoothGatt,
-            characteristic: BluetoothGattCharacteristic
-        ) {
-                when(characteristic.uuid) {
-                    TEMPERATURE_CHARACTERISTIC_UUID -> {
-                        tempValue = parseTemperature(characteristic.value)
-                    }
+        override fun onCharacteristicChanged(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
+            Log.d(TAG, "onCharacteristicChanged: UUID: " + characteristic.getUuid())
 
-                    HUMIDITY_CHARACTERISTIC_UUID -> {
-                        humidityValue = parseHumidity(characteristic.value)
-                    }
-                }
-            // Comprobar si ambos valores están disponibles
-            if (tempValue != null && humidityValue != null) {
-                val tempHumidityResult = TempHumidityResult(
-                    tempValue!!,
-                    humidityValue!!,
-                    ConnectionState.Connected
-                )
-                coroutineScope.launch {
-                    data.emit(Resource.Success(data = tempHumidityResult))
-                }
-                // Resetear los valores para futuras actualizaciones
-                tempValue = null
-                humidityValue = null
-             }
-        }
-
-        /*
-                override fun onCharacteristicChanged(
-                    gatt: BluetoothGatt,
-                    characteristic: BluetoothGattCharacteristic
-                ) {
-                    with(characteristic){
-                        when(uuid){
-                            UUID.fromString(TEMP_HUMIDITY_CHARACTERISTICS_UUID) -> {
-                                //XX XX XX XX XX XX
-                                val multiplicator = if(value.first().toInt()> 0) -1 else 1
-                                val temperature = value[1].toInt() + value[2].toInt() / 10f
-                                val humidity = value[4].toInt() + value[5].toInt() / 10f
-                                val tempHumidityResult = TempHumidityResult(
-                                    multiplicator * temperature,
-                                    humidity,
-                                    ConnectionState.Connected
-                                )
-                                coroutineScope.launch {
-                                    data.emit(
-                                        Resource.Success(data = tempHumidityResult)
-                                    )
-                                }
-                            }
-                            else -> Unit
+            when (characteristic.uuid) {
+                HUMIDITY_CHARACTERISTIC_UUID -> {
+                    if (!isTemperatureNotificationSet) {
+                        val temperatureCharacteristic = findCharacteristics(DEVICE_SERVICE_UUID.toString(), TEMPERATURE_CHARACTERISTIC_UUID.toString())
+                        if (temperatureCharacteristic != null) {
+                            isTemperatureNotificationSet = true
+                            enableNotification(temperatureCharacteristic)
                         }
                     }
+                    humidityValue = parseHumidity(characteristic.value)
+                    checkAndEmitResult()
                 }
-                */
+                TEMPERATURE_CHARACTERISTIC_UUID -> {
+                    if (!isTemperatureNotificationSet) {
+                        tempValue = parseTemperature(characteristic.value)
+                        checkAndEmitResult()
+                        isTemperatureNotificationSet = true
+                    } else {
+                        tempValue = parseTemperature(characteristic.value)
+                        checkAndEmitResult()
+                    }
+                }
+            }
+        }
+
 
     }
+
+    private fun checkAndEmitResult() {
+        // Comprobar si ambos valores están disponibles
+        if (tempValue != null && humidityValue != null) {
+            val tempHumidityResult = TempHumidityResult(
+                tempValue!!,
+                humidityValue!!,
+                ConnectionState.Connected
+            )
+            coroutineScope.launch {
+                data.emit(Resource.Success(data = tempHumidityResult))
+            }
+            // Resetear los valores para futuras actualizaciones
+            tempValue = null
+            humidityValue = null
+        }    }
 
     private fun parseHumidity(value: ByteArray): Float {
-        //TODO: lets try first byte humidity
-        return value[0].toFloat()
-    }
+        // Asegúrate de que los bytes estén en el orden correcto
+        val buffer = ByteBuffer.wrap(value).order(ByteOrder.LITTLE_ENDIAN)
+        // Convertir los bytes en un valor flotante
+        return buffer.getFloat()
+        }
 
     private fun parseTemperature(value: ByteArray): Float {
-        return value[1].toFloat()
+        // Asegúrate de que los bytes estén en el orden correcto
+        val buffer = ByteBuffer.wrap(value).order(ByteOrder.LITTLE_ENDIAN)
+        // Convertir los bytes en un valor flotante
+        return buffer.getFloat()
     }
 
     private fun enableNotification(characteristic: BluetoothGattCharacteristic){
