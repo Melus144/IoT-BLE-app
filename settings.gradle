@@ -12,5 +12,5 @@ dependencyResolutionManagement {
         mavenCentral()
     }
 }
-rootProject.name = "BLETutorial"
+rootProject.name = "IoTapp"
 include ':app'
