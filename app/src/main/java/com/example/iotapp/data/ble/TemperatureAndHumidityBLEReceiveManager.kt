@@ -36,7 +36,6 @@ class TemperatureAndHumidityBLEReceiveManager @Inject constructor(
     // Variables temporales
     private var tempValue: Float? = null
     private var humidityValue: Float? = null
-    private var isTemperatureNotificationSet = false
 
     override val data: MutableSharedFlow<Resource<TempHumidityResult>> = MutableSharedFlow()
 
@@ -118,7 +117,7 @@ class TemperatureAndHumidityBLEReceiveManager @Inject constructor(
             with(gatt){
                 printGattTable()
                 coroutineScope.launch {
-                    data.emit(Resource.Loading(message = "Activating Notifications..."))
+                    data.emit(Resource.Loading(message = "Waiting Notifications..."))
                 }
                 }
 
@@ -127,8 +126,7 @@ class TemperatureAndHumidityBLEReceiveManager @Inject constructor(
             val humidityCharacteristic = findCharacteristics(DEVICE_SERVICE_UUID.toString(), HUMIDITY_CHARACTERISTIC_UUID.toString())
             if (temperatureCharacteristic != null && humidityCharacteristic != null) {
                 enableNotification(humidityCharacteristic)
-                // If both characteristics are found, enable notifications on them
-                enableNotification(temperatureCharacteristic)
+                //enableNotification(temperatureCharacteristic)
             } else {
                 coroutineScope.launch {
                     data.emit(Resource.Error(errorMessage = "Could not find temperature and/or humidity characteristics"))
@@ -154,26 +152,24 @@ class TemperatureAndHumidityBLEReceiveManager @Inject constructor(
                 }
                 return
             }
-            enableNotification(humidityCharacteristic)
-            // If both characteristics are found, enable notifications on them
-            enableNotification(temperatureCharacteristic)
+            //enableNotification(humidityCharacteristic)
+            //enableNotification(temperatureCharacteristic)
             }
 
         override fun onCharacteristicChanged(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
             Log.d(TAG, "onCharacteristicChanged: UUID: " + characteristic.getUuid())
-
+            //When we receive a notification from the humidity characteristic, we read it and then the temperature characteristic value
             when (characteristic.uuid) {
                 HUMIDITY_CHARACTERISTIC_UUID -> {
-                    if (!isTemperatureNotificationSet) {
-                        val temperatureCharacteristic = findCharacteristics(DEVICE_SERVICE_UUID.toString(), TEMPERATURE_CHARACTERISTIC_UUID.toString())
-                        if (temperatureCharacteristic != null) {
-                            isTemperatureNotificationSet = true
-                            enableNotification(temperatureCharacteristic)
-                        }
-                    }
                     humidityValue = parseHumidity(characteristic.value)
-                    checkAndEmitResult()
+                    val temperatureCharacteristic = findCharacteristics(DEVICE_SERVICE_UUID.toString(), TEMPERATURE_CHARACTERISTIC_UUID.toString())
+                    if (temperatureCharacteristic != null) {
+                        gatt.readCharacteristic(temperatureCharacteristic)
+                    }
                 }
+                //We don't notify the temperature characteristic due to firmware issues/limitations
+                //We are reading the temperature characteristic value when the humidity characteristic is notified instead
+                /*
                 TEMPERATURE_CHARACTERISTIC_UUID -> {
                     if (!isTemperatureNotificationSet) {
                         tempValue = parseTemperature(characteristic.value)
@@ -184,10 +180,29 @@ class TemperatureAndHumidityBLEReceiveManager @Inject constructor(
                         checkAndEmitResult()
                     }
                 }
+                */
+
             }
         }
 
+        // Asegúrate de implementar también el método onCharacteristicRead
+        override fun onCharacteristicRead(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, status: Int) {
+            if (status == BluetoothGatt.GATT_SUCCESS) {
+                Log.d(TAG, "onCharacteristicRead: UUID: " + characteristic.getUuid())
+                if (characteristic.uuid == TEMPERATURE_CHARACTERISTIC_UUID) {
+                    tempValue = parseTemperature(characteristic.value)
+                    checkAndEmitResult()
+                }
+            }
+        }
+    }
 
+
+    private fun parseHumidity(value: ByteArray): Float {
+        // Asegúrate de que los bytes estén en el orden correcto
+        val buffer = ByteBuffer.wrap(value).order(ByteOrder.LITTLE_ENDIAN)
+        // Convertir los bytes en un valor flotante
+        return buffer.getFloat()
     }
 
     private fun checkAndEmitResult() {
@@ -202,16 +217,11 @@ class TemperatureAndHumidityBLEReceiveManager @Inject constructor(
                 data.emit(Resource.Success(data = tempHumidityResult))
             }
             // Resetear los valores para futuras actualizaciones
-            //tempValue = null
+            tempValue = null
             humidityValue = null
-        }    }
-
-    private fun parseHumidity(value: ByteArray): Float {
-        // Asegúrate de que los bytes estén en el orden correcto
-        val buffer = ByteBuffer.wrap(value).order(ByteOrder.LITTLE_ENDIAN)
-        // Convertir los bytes en un valor flotante
-        return buffer.getFloat()
         }
+    }
+
 
     private fun parseTemperature(value: ByteArray): Float {
         // Asegúrate de que los bytes estén en el orden correcto
