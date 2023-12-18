@@ -21,6 +21,44 @@ import javax.inject.Inject
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
+import java.sql.Connection
+import java.sql.DriverManager
+import java.sql.PreparedStatement
+import java.sql.SQLException
+import kotlinx.coroutines.withContext
+
+import com.microsoft.sqlserver.jdbc.SQLServerDriver;
+
+
+
+object SensorDataUploader {
+
+    private const val DB_URL = "jdbc:sqlserver://iotgroup5.database.windows.net:1433;database=IotBase;"
+    private const val USER = "CloudSA8e466240"
+    private const val PASSWORD = "Elastiek1!" // Reemplaza con tu contraseña real
+
+    suspend fun insertSensorData(temperature: Float, humidity: Float) {
+        Log.d("SensorDataUploader", "Inserting into database: $temperature, $humidity")
+        withContext(Dispatchers.IO) {
+            try {
+                DriverManager.registerDriver(SQLServerDriver());
+                DriverManager.getConnection(DB_URL, USER, PASSWORD).use { connection ->
+                    val insertQuery = "INSERT INTO SensorData (Temperature, Humidity) VALUES (?, ?)"
+                    connection.prepareStatement(insertQuery).use { preparedStatement ->
+                        // Aquí usamos setFloat en lugar de setDouble
+                        preparedStatement.setFloat(1, temperature)
+                        preparedStatement.setFloat(2, humidity)
+                        preparedStatement.executeUpdate()
+                    }
+                }
+            } catch (e: SQLException) {
+                e.printStackTrace()
+                // Maneja las excepciones adecuadamente según los requerimientos de tu aplicación
+            }
+        }
+    }
+}
+
 @SuppressLint("MissingPermission")
 class TemperatureAndHumidityBLEReceiveManager @Inject constructor(
     private val bluetoothAdapter: BluetoothAdapter,
@@ -214,6 +252,8 @@ class TemperatureAndHumidityBLEReceiveManager @Inject constructor(
                 ConnectionState.Connected
             )
             coroutineScope.launch {
+                Log.d(TAG, "Saving to database: Temperature = ${tempHumidityResult.temperature}, Humidity = ${tempHumidityResult.humidity}")
+                SensorDataUploader.insertSensorData(tempHumidityResult.temperature, tempHumidityResult.humidity)
                 data.emit(Resource.Success(data = tempHumidityResult))
             }
             // Resetear los valores para futuras actualizaciones

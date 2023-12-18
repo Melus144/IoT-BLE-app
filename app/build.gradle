@@ -73,4 +73,7 @@ dependencies {
 
     //Permissions
     implementation "com.google.accompanist:accompanist-permissions:0.21.1-beta"
+
+    implementation 'com.microsoft.sqlserver:mssql-jdbc:9.2.0.jre8'
+
 }
